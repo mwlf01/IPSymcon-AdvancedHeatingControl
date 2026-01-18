@@ -1,0 +1,12 @@
+{
+    "id": "{A80CB3D7-2CA9-D544-06AC-53D55D007B5F}",
+    "name": "AdvancedHeatingControl",
+    "author": "mwlf01",
+    "url": "https://github.com/mwlf01/IPSymcon-AdvancedHeatingControl",
+    "compatibility": {
+        "version": "8.1"
+    },
+    "version": "1.0.0",
+    "build": 1,
+    "date": 20260118
+}

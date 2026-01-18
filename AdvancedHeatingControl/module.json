@@ -1,0 +1,18 @@
+{
+    "id": "{B5D41672-B6FF-5A3B-A6E2-11A1DBDAF0F3}",
+    "name": "AdvancedHeatingControl",
+    "type": 3,
+    "vendor": "",
+    "aliases": [
+        "Advanced Heating Control",
+        "Erweiterte Heizungssteuerung",
+        "Thermostat Control",
+        "Thermostatsteuerung",
+        "Heizungsregelung"
+    ],
+    "parentRequirements": [],
+    "childRequirements": [],
+    "implemented": [],
+    "prefix": "AHC",
+    "url": "https://github.com/mwlf01/IPSymcon-AdvancedHeatingControl"
+}
