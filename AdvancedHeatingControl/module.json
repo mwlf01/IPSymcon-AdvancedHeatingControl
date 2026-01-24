@@ -5,10 +5,8 @@
     "vendor": "",
     "aliases": [
         "Advanced Heating Control",
-        "Erweiterte Heizungssteuerung",
         "Thermostat Control",
-        "Thermostatsteuerung",
-        "Heizungsregelung"
+        "Heating Control"
     ],
     "parentRequirements": [],
     "childRequirements": [],

@@ -1,6 +1,9 @@
 {
     "translations": {
         "de": {
+            "Advanced Heating Control": "Erweiterte Heizungssteuerung",
+            "Thermostat Control": "Thermostatsteuerung",
+            "Heating Control": "Heizungsregelung",
             "Thermostats": "Thermostate",
             "Heating Thermostats": "Heizungsthermostate",
             "Thermostat Variable": "Thermostat-Variable",
