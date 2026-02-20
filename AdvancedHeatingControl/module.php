@@ -39,6 +39,15 @@ class AdvancedHeatingControl extends IPSModule
     {
         parent::ApplyChanges();
 
+        // Track which variables already exist before MaintainVariable calls
+        $existingVars = [];
+        foreach (['TargetTemperature', 'CurrentTemperature', 'HeatingMode', 'ComfortTemp', 'EcoTemp', 'AwayTemp', 'BoostTemp', 'NightSetbackActive', 'NightSetbackTemp', 'ManualOperationBlocked', 'WindowOpen', 'WindowOpenTemp'] as $ident) {
+            $id = @$this->GetIDForIdent($ident);
+            if ($id && @IPS_VariableExists($id)) {
+                $existingVars[$ident] = true;
+            }
+        }
+
         // Get presentation IDs dynamically
         $sliderPresentationID = $this->getPresentationIDByCaption('Slider');
         $valuePresentationID = $this->getPresentationIDByCaption('Value Presentation');
@@ -62,7 +71,7 @@ class AdvancedHeatingControl extends IPSModule
         // Target Temperature variable (position 1) - Slider presentation for thermostat visualization
         $this->MaintainVariable('TargetTemperature', $this->Translate('Target Temperature'), VARIABLETYPE_FLOAT, $tempPresentation, 1, true);
         $this->EnableAction('TargetTemperature');
-        $this->initializeVariableDefault('TargetTemperature', 21.0);
+        $this->initializeVariableDefault('TargetTemperature', 21.0, $existingVars);
 
         // Current Room Temperature variable (position 2) - Value Presentation (no action)
         $this->MaintainVariable('CurrentTemperature', $this->Translate('Current Temperature'), VARIABLETYPE_FLOAT, [
@@ -87,27 +96,27 @@ class AdvancedHeatingControl extends IPSModule
             'OPTIONS' => $heatingModeOptions
         ], 3, true);
         $this->EnableAction('HeatingMode');
-        $this->initializeVariableDefault('HeatingMode', 0);
+        $this->initializeVariableDefault('HeatingMode', 0, $existingVars);
 
         // Comfort Temperature variable (position 4)
         $this->MaintainVariable('ComfortTemp', $this->Translate('Comfort Temperature'), VARIABLETYPE_FLOAT, $tempPresentation, 4, true);
         $this->EnableAction('ComfortTemp');
-        $this->initializeVariableDefault('ComfortTemp', 21.0);
+        $this->initializeVariableDefault('ComfortTemp', 21.0, $existingVars);
 
         // Eco Temperature variable (position 5)
         $this->MaintainVariable('EcoTemp', $this->Translate('Eco Temperature'), VARIABLETYPE_FLOAT, $tempPresentation, 5, true);
         $this->EnableAction('EcoTemp');
-        $this->initializeVariableDefault('EcoTemp', 18.0);
+        $this->initializeVariableDefault('EcoTemp', 18.0, $existingVars);
 
         // Away Temperature variable (position 6)
         $this->MaintainVariable('AwayTemp', $this->Translate('Away Temperature'), VARIABLETYPE_FLOAT, $tempPresentation, 6, true);
         $this->EnableAction('AwayTemp');
-        $this->initializeVariableDefault('AwayTemp', 15.0);
+        $this->initializeVariableDefault('AwayTemp', 15.0, $existingVars);
 
         // Boost Temperature variable (position 7)
         $this->MaintainVariable('BoostTemp', $this->Translate('Boost Temperature'), VARIABLETYPE_FLOAT, $tempPresentation, 7, true);
         $this->EnableAction('BoostTemp');
-        $this->initializeVariableDefault('BoostTemp', 24.0);
+        $this->initializeVariableDefault('BoostTemp', 24.0, $existingVars);
 
         // Switch presentation config (reused for boolean switches)
         $switchPresentationID = $this->getPresentationIDByCaption('Switch');
@@ -122,12 +131,12 @@ class AdvancedHeatingControl extends IPSModule
         // Night Setback Active variable (position 8)
         $this->MaintainVariable('NightSetbackActive', $this->Translate('Night Setback Active'), VARIABLETYPE_BOOLEAN, $switchPresentation, 8, true);
         $this->EnableAction('NightSetbackActive');
-        $this->initializeVariableDefault('NightSetbackActive', false);
+        $this->initializeVariableDefault('NightSetbackActive', false, $existingVars);
 
         // Night Setback Temperature variable (position 9)
         $this->MaintainVariable('NightSetbackTemp', $this->Translate('Night Setback Temperature'), VARIABLETYPE_FLOAT, $tempPresentation, 9, true);
         $this->EnableAction('NightSetbackTemp');
-        $this->initializeVariableDefault('NightSetbackTemp', 16.0);
+        $this->initializeVariableDefault('NightSetbackTemp', 16.0, $existingVars);
 
         // Manual Operation Blocked variable (position 10) - Switch with lock icon
         $lockSwitchPresentation = [
@@ -139,7 +148,7 @@ class AdvancedHeatingControl extends IPSModule
         ];
         $this->MaintainVariable('ManualOperationBlocked', $this->Translate('Manual Operation Blocked'), VARIABLETYPE_BOOLEAN, $lockSwitchPresentation, 10, true);
         $this->EnableAction('ManualOperationBlocked');
-        $this->initializeVariableDefault('ManualOperationBlocked', false);
+        $this->initializeVariableDefault('ManualOperationBlocked', false, $existingVars);
 
         // Window Open indicator variable (position 11) - read-only value presentation
         $windowOpenOptions = json_encode([
@@ -151,12 +160,12 @@ class AdvancedHeatingControl extends IPSModule
             'ICON' => 'Window',
             'OPTIONS' => $windowOpenOptions
         ], 11, true);
-        $this->initializeVariableDefault('WindowOpen', false);
+        $this->initializeVariableDefault('WindowOpen', false, $existingVars);
 
         // Window Open Temperature variable (position 12)
         $this->MaintainVariable('WindowOpenTemp', $this->Translate('Window Open Temperature'), VARIABLETYPE_FLOAT, $tempPresentation, 12, true);
         $this->EnableAction('WindowOpenTemp');
-        $this->initializeVariableDefault('WindowOpenTemp', 12.0);
+        $this->initializeVariableDefault('WindowOpenTemp', 12.0, $existingVars);
 
         // Remove old variables if they exist
         $this->MaintainVariable('FrostTemp', '', VARIABLETYPE_FLOAT, '', 0, false);
@@ -988,21 +997,19 @@ class AdvancedHeatingControl extends IPSModule
         }
     }
 
-    private function initializeVariableDefault(string $ident, $defaultValue): void
+    private function initializeVariableDefault(string $ident, $defaultValue, array $existingVars = []): void
     {
+        // Only set defaults for newly created variables
+        if (isset($existingVars[$ident])) {
+            return;
+        }
+
         $varID = @$this->GetIDForIdent($ident);
         if (!$varID || !@IPS_VariableExists($varID)) {
             return;
         }
 
-        $variable = IPS_GetVariable($varID);
-        
-        $lastChange = $variable['VariableChanged'];
-        $created = $variable['VariableUpdated'];
-        
-        if ($lastChange == 0 || abs($lastChange - $created) < 2) {
-            SetValue($varID, $defaultValue);
-        }
+        SetValue($varID, $defaultValue);
     }
 
     private function getPresentationIDByCaption(string $caption): string

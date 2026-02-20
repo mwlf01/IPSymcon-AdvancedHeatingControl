@@ -325,6 +325,9 @@ int AHC_GetScheduleEventID(int $InstanceID);
 
 ## Changelog
 
+### Version 1.1.0
+- Fixed: Variable values (temperatures, modes, switches) are no longer reset to defaults when configuration changes are applied (e.g., adding a thermostat)
+
 ### Version 1.0.0
 - Initial release
 - Multi-thermostat control with unified target temperature

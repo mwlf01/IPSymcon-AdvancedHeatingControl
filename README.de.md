@@ -325,6 +325,9 @@ int AHC_GetScheduleEventID(int $InstanceID);
 
 ## Changelog
 
+### Version 1.1.0
+- Behoben: Variablenwerte (Temperaturen, Modi, Schalter) werden bei Konfigurationsänderungen (z.B. Hinzufügen eines Thermostats) nicht mehr auf Standardwerte zurückgesetzt
+
 ### Version 1.0.0
 - Erstveröffentlichung
 - Multi-Thermostat-Steuerung mit einheitlicher Solltemperatur
