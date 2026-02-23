@@ -47,6 +47,11 @@ A powerful IP-Symcon module for centralized heating control with multiple thermo
   - Override schedule with a fixed setback temperature
   - Enable/disable via boolean variable
   - When disabled, current schedule mode is automatically reapplied
+- **Permanent Away Mode**:
+  - Override schedule with the configured away temperature
+  - Enable/disable via boolean variable
+  - Night setback has higher priority than away mode
+  - When disabled, current schedule mode is automatically reapplied
 - **Window Contacts**:
   - Configure multiple window contact sensors
   - Automatic temperature reduction when windows are open
@@ -187,6 +192,7 @@ The module creates the following variables:
 | **Manual Operation Blocked** | Boolean | When enabled, changes on thermostats are immediately reverted |
 | **Window Open** | Boolean | Indicates if any configured window contact is open (read-only) |
 | **Window Open Temperature** | Float | Temperature applied when a window is open (default: 12°C) |
+| **Away Mode Active** | Boolean | Enable/disable permanent away mode (uses away temperature) |
 
 ---
 
@@ -285,6 +291,27 @@ AHC_SetNightSetback(12345, true);
 AHC_SetNightSetback(12345, false);
 ```
 
+### SetPermanentAwayMode
+
+Enable or disable permanent away mode.
+
+```php
+AHC_SetPermanentAwayMode(int $InstanceID, bool $Active);
+```
+
+**Parameters:**
+- `$InstanceID` - ID of the AdvancedHeatingControl instance
+- `$Active` - true to enable, false to disable
+
+**Example:**
+```php
+// Enable permanent away mode
+AHC_SetPermanentAwayMode(12345, true);
+
+// Disable permanent away mode (reapplies current schedule mode)
+AHC_SetPermanentAwayMode(12345, false);
+```
+
 ### GetCurrentTemperature
 
 Get the current room temperature.
@@ -324,6 +351,11 @@ int AHC_GetScheduleEventID(int $InstanceID);
 ---
 
 ## Changelog
+
+### Version 1.2.0
+- Added: Permanent away mode (`Away Mode Active`) - permanently applies the away temperature, overriding the schedule
+- Added: `AHC_SetPermanentAwayMode` PHP function for scripting
+- Priority chain: Window Open > Night Setback > Away Mode > Schedule
 
 ### Version 1.1.0
 - Fixed: Variable values (temperatures, modes, switches) are no longer reset to defaults when configuration changes are applied (e.g., adding a thermostat)

@@ -41,7 +41,7 @@ class AdvancedHeatingControl extends IPSModule
 
         // Track which variables already exist before MaintainVariable calls
         $existingVars = [];
-        foreach (['TargetTemperature', 'CurrentTemperature', 'HeatingMode', 'ComfortTemp', 'EcoTemp', 'AwayTemp', 'BoostTemp', 'NightSetbackActive', 'NightSetbackTemp', 'ManualOperationBlocked', 'WindowOpen', 'WindowOpenTemp'] as $ident) {
+        foreach (['TargetTemperature', 'CurrentTemperature', 'HeatingMode', 'ComfortTemp', 'EcoTemp', 'AwayTemp', 'BoostTemp', 'NightSetbackActive', 'NightSetbackTemp', 'ManualOperationBlocked', 'WindowOpen', 'WindowOpenTemp', 'AwayModeActive'] as $ident) {
             $id = @$this->GetIDForIdent($ident);
             if ($id && @IPS_VariableExists($id)) {
                 $existingVars[$ident] = true;
@@ -166,6 +166,11 @@ class AdvancedHeatingControl extends IPSModule
         $this->MaintainVariable('WindowOpenTemp', $this->Translate('Window Open Temperature'), VARIABLETYPE_FLOAT, $tempPresentation, 12, true);
         $this->EnableAction('WindowOpenTemp');
         $this->initializeVariableDefault('WindowOpenTemp', 12.0, $existingVars);
+
+        // Away Mode Active variable (position 13) - permanent away temperature override
+        $this->MaintainVariable('AwayModeActive', $this->Translate('Away Mode Active'), VARIABLETYPE_BOOLEAN, $switchPresentation, 13, true);
+        $this->EnableAction('AwayModeActive');
+        $this->initializeVariableDefault('AwayModeActive', false, $existingVars);
 
         // Remove old variables if they exist
         $this->MaintainVariable('FrostTemp', '', VARIABLETYPE_FLOAT, '', 0, false);
@@ -427,8 +432,8 @@ class AdvancedHeatingControl extends IPSModule
             case 'AwayTemp':
                 $val = max($minTemp, min($maxTemp, (float)$Value));
                 SetValue($this->GetIDForIdent('AwayTemp'), $val);
-                // Update target if currently in away mode and neither night setback nor window active
-                if ($this->getCurrentMode() === 3 && !$this->isNightSetbackActive() && !$this->isWindowOpen()) {
+                // Update target if away mode active OR currently in away schedule mode, and neither night setback nor window active
+                if (($this->isAwayModeActive() || $this->getCurrentMode() === 3) && !$this->isNightSetbackActive() && !$this->isWindowOpen()) {
                     SetValue($this->GetIDForIdent('TargetTemperature'), $val);
                     $this->ApplyTemperature();
                 }
@@ -455,8 +460,14 @@ class AdvancedHeatingControl extends IPSModule
                         SetValue($this->GetIDForIdent('TargetTemperature'), $setbackTemp);
                         $this->ApplyTemperature();
                     } else {
-                        // Night setback deactivated - reapply current schedule mode
-                        $this->applyHeatingMode($this->getCurrentMode());
+                        // Night setback deactivated - check away mode, then fall back to schedule
+                        if ($this->isAwayModeActive()) {
+                            $awayTemp = @GetValue($this->GetIDForIdent('AwayTemp'));
+                            SetValue($this->GetIDForIdent('TargetTemperature'), $awayTemp);
+                            $this->ApplyTemperature();
+                        } else {
+                            $this->applyHeatingMode($this->getCurrentMode());
+                        }
                     }
                 }
                 break;
@@ -473,6 +484,23 @@ class AdvancedHeatingControl extends IPSModule
 
             case 'ManualOperationBlocked':
                 SetValue($this->GetIDForIdent('ManualOperationBlocked'), (bool)$Value);
+                break;
+
+            case 'AwayModeActive':
+                $active = (bool)$Value;
+                SetValue($this->GetIDForIdent('AwayModeActive'), $active);
+                // Only apply if window and night setback are not active
+                if (!$this->isWindowOpen() && !$this->isNightSetbackActive()) {
+                    if ($active) {
+                        // Away mode activated - apply away temperature
+                        $awayTemp = @GetValue($this->GetIDForIdent('AwayTemp'));
+                        SetValue($this->GetIDForIdent('TargetTemperature'), $awayTemp);
+                        $this->ApplyTemperature();
+                    } else {
+                        // Away mode deactivated - reapply current schedule mode
+                        $this->applyHeatingMode($this->getCurrentMode());
+                    }
+                }
                 break;
 
             case 'WindowOpenTemp':
@@ -520,8 +548,8 @@ class AdvancedHeatingControl extends IPSModule
         // Always update the heating mode variable (so we know what schedule wants)
         SetValue($this->GetIDForIdent('HeatingMode'), $mode);
 
-        // Only apply temperature to thermostats if night setback and window are NOT active
-        if (!$this->isNightSetbackActive() && !$this->isWindowOpen()) {
+        // Only apply temperature to thermostats if night setback, away mode, and window are NOT active
+        if (!$this->isNightSetbackActive() && !$this->isAwayModeActive() && !$this->isWindowOpen()) {
             $this->applyHeatingMode($mode);
         }
     }
@@ -603,8 +631,8 @@ class AdvancedHeatingControl extends IPSModule
     {
         $mode = max(0, min(4, $Mode));
         SetValue($this->GetIDForIdent('HeatingMode'), $mode);
-        // Only apply if night setback is not active
-        if (!$this->isNightSetbackActive()) {
+        // Only apply if night setback and away mode are not active
+        if (!$this->isNightSetbackActive() && !$this->isAwayModeActive()) {
             $this->applyHeatingMode($mode);
         }
     }
@@ -662,8 +690,33 @@ class AdvancedHeatingControl extends IPSModule
             SetValue($this->GetIDForIdent('TargetTemperature'), $setbackTemp);
             $this->ApplyTemperature();
         } else {
-            // Night setback deactivated - reapply current schedule mode
-            $this->applyHeatingMode($this->getCurrentMode());
+            // Night setback deactivated - check away mode, then fall back to schedule
+            if ($this->isAwayModeActive()) {
+                $awayTemp = @GetValue($this->GetIDForIdent('AwayTemp'));
+                SetValue($this->GetIDForIdent('TargetTemperature'), $awayTemp);
+                $this->ApplyTemperature();
+            } else {
+                $this->applyHeatingMode($this->getCurrentMode());
+            }
+        }
+    }
+
+    /**
+     * Enable or disable permanent away mode
+     * @param bool $Active True to enable, false to disable
+     */
+    public function SetPermanentAwayMode(bool $Active): void
+    {
+        SetValue($this->GetIDForIdent('AwayModeActive'), $Active);
+        // Only apply if window and night setback are not active
+        if (!$this->isWindowOpen() && !$this->isNightSetbackActive()) {
+            if ($Active) {
+                $awayTemp = @GetValue($this->GetIDForIdent('AwayTemp'));
+                SetValue($this->GetIDForIdent('TargetTemperature'), $awayTemp);
+                $this->ApplyTemperature();
+            } else {
+                $this->applyHeatingMode($this->getCurrentMode());
+            }
         }
     }
 
@@ -811,6 +864,15 @@ class AdvancedHeatingControl extends IPSModule
         return false;
     }
 
+    private function isAwayModeActive(): bool
+    {
+        $varID = @$this->GetIDForIdent('AwayModeActive');
+        if ($varID && @IPS_VariableExists($varID)) {
+            return (bool)@GetValue($varID);
+        }
+        return false;
+    }
+
     private function applyHeatingMode(int $mode): void
     {
         $targetTemp = 0.0;
@@ -934,10 +996,14 @@ class AdvancedHeatingControl extends IPSModule
             SetValue($this->GetIDForIdent('TargetTemperature'), $windowOpenTemp);
             $this->ApplyTemperature();
         } elseif (!$anyWindowOpen && $wasWindowOpen) {
-            // Window just closed - apply current schedule mode (or night setback if active)
+            // Window just closed - apply by priority: night setback > away mode > schedule
             if ($this->isNightSetbackActive()) {
                 $newTemp = @GetValue($this->GetIDForIdent('NightSetbackTemp'));
                 SetValue($this->GetIDForIdent('TargetTemperature'), $newTemp);
+                $this->ApplyTemperature();
+            } elseif ($this->isAwayModeActive()) {
+                $awayTemp = @GetValue($this->GetIDForIdent('AwayTemp'));
+                SetValue($this->GetIDForIdent('TargetTemperature'), $awayTemp);
                 $this->ApplyTemperature();
             } else {
                 $this->applyHeatingMode($this->getCurrentMode());

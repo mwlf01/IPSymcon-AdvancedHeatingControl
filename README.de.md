@@ -47,6 +47,11 @@ Ein leistungsstarkes IP-Symcon-Modul zur zentralen Heizungssteuerung mit mehrere
   - Zeitplan mit fester Absenktemperatur überschreiben
   - Ein-/Ausschalten über Boolean-Variable
   - Bei Deaktivierung wird der aktuelle Zeitplanmodus automatisch wieder angewendet
+- **Dauerhafter Abwesenheitsmodus**:
+  - Zeitplan mit der konfigurierten Abwesend-Temperatur überschreiben
+  - Ein-/Ausschalten über Boolean-Variable
+  - Nachtabsenkung hat höhere Priorität als der Abwesenheitsmodus
+  - Bei Deaktivierung wird der aktuelle Zeitplanmodus automatisch wieder angewendet
 - **Fensterkontakte**:
   - Mehrere Fensterkontakt-Sensoren konfigurierbar
   - Automatische Temperaturabsenkung bei geöffneten Fenstern
@@ -187,6 +192,7 @@ Das Modul erstellt folgende Variablen:
 | **Manuelle Bedienung gesperrt** | Boolean | Bei Aktivierung werden Änderungen am Thermostat sofort zurückgesetzt |
 | **Fenster offen** | Boolean | Zeigt an, ob ein konfigurierter Fensterkontakt geöffnet ist (nur lesbar) |
 | **Fenster-offen-Temperatur** | Float | Temperatur bei geöffnetem Fenster (Standard: 12°C) |
+| **Abwesenheitsmodus aktiv** | Boolean | Dauerhaften Abwesenheitsmodus ein-/ausschalten (verwendet Abwesend-Temperatur) |
 
 ---
 
@@ -285,6 +291,27 @@ AHC_SetNightSetback(12345, true);
 AHC_SetNightSetback(12345, false);
 ```
 
+### SetPermanentAwayMode
+
+Dauerhaften Abwesenheitsmodus ein- oder ausschalten.
+
+```php
+AHC_SetPermanentAwayMode(int $InstanceID, bool $Active);
+```
+
+**Parameter:**
+- `$InstanceID` - ID der AdvancedHeatingControl-Instanz
+- `$Active` - true zum Aktivieren, false zum Deaktivieren
+
+**Beispiel:**
+```php
+// Dauerhaften Abwesenheitsmodus aktivieren
+AHC_SetPermanentAwayMode(12345, true);
+
+// Dauerhaften Abwesenheitsmodus deaktivieren (wendet aktuellen Zeitplanmodus wieder an)
+AHC_SetPermanentAwayMode(12345, false);
+```
+
 ### GetCurrentTemperature
 
 Die aktuelle Raumtemperatur abrufen.
@@ -324,6 +351,11 @@ int AHC_GetScheduleEventID(int $InstanceID);
 ---
 
 ## Changelog
+
+### Version 1.2.0
+- Neu: Dauerhafter Abwesenheitsmodus (`Abwesenheitsmodus aktiv`) - wendet dauerhaft die Abwesend-Temperatur an und überschreibt den Zeitplan
+- Neu: `AHC_SetPermanentAwayMode` PHP-Funktion für Skripte
+- Prioritätskette: Fenster offen > Nachtabsenkung > Abwesenheitsmodus > Zeitplan
 
 ### Version 1.1.0
 - Behoben: Variablenwerte (Temperaturen, Modi, Schalter) werden bei Konfigurationsänderungen (z.B. Hinzufügen eines Thermostats) nicht mehr auf Standardwerte zurückgesetzt

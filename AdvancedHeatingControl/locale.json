@@ -42,7 +42,8 @@
             "Window Open": "Fenster offen",
             "Window Open Temperature": "Fenster-offen-Temperatur",
             "Closed": "Geschlossen",
-            "Open": "Offen"
+            "Open": "Offen",
+            "Away Mode Active": "Abwesenheitsmodus aktiv"
         }
     }
 }
