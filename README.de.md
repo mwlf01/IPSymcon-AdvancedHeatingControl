@@ -380,6 +380,7 @@ int AHC_GetScheduleEventID(int $InstanceID);
 Bei Problemen, Funktionswünschen oder Beiträgen besuchen Sie bitte:
 - [GitHub Repository](https://github.com/mwlf01/IPSymcon-AdvancedHeatingControl)
 - [GitHub Issues](https://github.com/mwlf01/IPSymcon-AdvancedHeatingControl/issues)
+- [Symcon Community](https://community.symcon.de/) – Benutzer: **mwlf**
 
 ---
 
@@ -396,3 +397,4 @@ Die MIT-Lizenz erlaubt die freie Nutzung, Modifikation und Weitergabe der Softwa
 **mwlf01**
 
 - GitHub: [@mwlf01](https://github.com/mwlf01)
+- Symcon Community: [mwlf](https://community.symcon.de/)
