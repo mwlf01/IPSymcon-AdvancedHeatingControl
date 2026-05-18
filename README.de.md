@@ -1,11 +1,11 @@
 # AdvancedHeatingControl für IP-Symcon
 
 [![IP-Symcon Version](https://img.shields.io/badge/IP--Symcon-8.1+-blue.svg)](https://www.symcon.de)
-[![Lizenz](https://img.shields.io/badge/Lizenz-MIT-green.svg)](LICENSE)
+[![Lizenz: EUPL-1.2](https://img.shields.io/badge/Lizenz-EUPL--1.2-blue.svg)](LICENSE)
 
 Ein leistungsstarkes IP-Symcon-Modul zur zentralen Heizungssteuerung mit mehreren Thermostaten, Raumtemperatursensoren und Wochenplanung.
 
-**[English version](README.md)**
+**[English Version](README.md)**
 
 ---
 
@@ -18,7 +18,7 @@ Ein leistungsstarkes IP-Symcon-Modul zur zentralen Heizungssteuerung mit mehrere
   - [Thermostate](#thermostate)
   - [Temperatursensoren](#temperatursensoren)
   - [Fensterkontakte](#fensterkontakte)
-  - [Wochenplan](#wochenplan)
+  - [Wochenpläne](#wochenpläne)
 - [Variablen](#variablen)
 - [PHP-Funktionen](#php-funktionen)
 - [Lizenz](#lizenz)
@@ -38,11 +38,12 @@ Ein leistungsstarkes IP-Symcon-Modul zur zentralen Heizungssteuerung mit mehrere
   - **Eco**: Energiesparende reduzierte Temperatur (~18°C)
   - **Abwesend**: Reduzierte Temperatur bei Abwesenheit (~15°C)
   - **Boost**: Höhere Temperatur für schnelles Aufwärmen (~24°C)
-- **Wochenplan**:
-  - Verwendet das integrierte Zeitplan-Ereignis von IP-Symcon
-  - Visueller Zeitplan-Editor in der Konsole
-  - Fünf Zeitplanaktionen: Komfort, Eco, Abwesend, Boost, Aus
+- **Wochenpläne**:
+  - Beliebig viele parallel laufende Wochenpläne über die Instanzkonfiguration
+  - Jeder Plan ist ein eigenes IP-Symcon-Zeitplan-Ereignis mit visuellem Editor in der Konsole
+  - Fünf Zeitplanaktionen pro Plan: Komfort, Eco, Abwesend, Boost, Aus
   - Individuelle Konfiguration für jeden Wochentag
+  - Aktivieren oder Deaktivieren einzelner Pläne über den eingebauten Schalter am Wochenplan-Ereignis
 - **Nachtabsenkung**:
   - Zeitplan mit fester Absenktemperatur überschreiben
   - Ein-/Ausschalten über Boolean-Variable
@@ -159,18 +160,21 @@ Konfigurieren Sie den Temperaturbereich und die Schrittgröße:
 | **Maximaltemperatur** | Höchste erlaubte Temperatur | 30.0°C |
 | **Temperaturschritt** | Schrittgröße für Temperaturanpassungen | 0.5°C |
 
-### Wochenplan
+### Wochenpläne
 
-Das Modul verwendet das integrierte Zeitplan-Ereignis von IP-Symcon für zeitbasierte Heizungssteuerung:
+Das Modul unterstützt beliebig viele parallel laufende Wochenplan-Ereignisse für die zeitbasierte Heizungssteuerung:
 
-- Ein Zeitplan-Ereignis wird automatisch unterhalb der Instanz erstellt
-- Fünf Zeitplanaktionen stehen zur Verfügung: **Komfort**, **Eco**, **Abwesend**, **Boost**, **Aus**
-- Jeder Wochentag kann individuell konfiguriert werden
-- Verwenden Sie den visuellen Zeitplan-Editor in der IP-Symcon-Konsole oder im WebFront
+- Fügen Sie einen oder mehrere Einträge zur Liste **Wochenpläne** in der Instanzkonfiguration hinzu
+- Für jeden Eintrag legt das Modul unterhalb der Instanz ein Wochenplan-Ereignis mit den Aktionen **Aus**, **Komfort**, **Eco**, **Abwesend** und **Boost** an
+- Die automatisch vergebene Ereignis-ID wird nach dem Speichern in die Liste zurückgeschrieben
+- Schaltzeiten werden im visuellen Zeitplan-Editor (IP-Symcon-Konsole oder WebFront) des jeweiligen Ereignisses konfiguriert
+- Einzelne Pläne werden über den eingebauten Schalter am Wochenplan-Ereignis aktiviert oder deaktiviert — keine Konfigurationsänderung am Modul nötig
+- Pläne laufen parallel; wenn mehrere Pläne gleichzeitig schalten, gewinnt die zuletzt ausgeführte Aktion
+- Wird ein Plan aus der Liste entfernt, wird das zugehörige Ereignis beim nächsten Speichern gelöscht
 
 Temperaturvoreinstellungen (Komfort, Eco, Abwesend, Boost) werden über Variablen in der Visualisierung konfiguriert, nicht in der Instanzkonfiguration.
 
-**Nachtabsenkung:** Bei Aktivierung überschreibt die Nachtabsenkung-Temperatur den Zeitplan. Der Zeitplan läuft im Hintergrund weiter, aber die Absenktemperatur wird auf die Thermostate angewendet. Bei Deaktivierung wird der aktuelle Zeitplanmodus wieder angewendet.
+**Nachtabsenkung:** Bei Aktivierung überschreibt die Nachtabsenkung-Temperatur alle aktiven Pläne. Die Pläne laufen im Hintergrund weiter, aber die Absenktemperatur wird auf die Thermostate angewendet. Bei Deaktivierung wird der aktuelle Zeitplanmodus wieder angewendet.
 
 ---
 
@@ -246,7 +250,7 @@ AHC_SetHeatingMode(int $InstanceID, int $Mode);
 **Beispiel:**
 ```php
 // Auf Eco-Modus setzen
-AHC_SetHeatingMode(12345, 1);
+AHC_SetHeatingMode(12345, 2);
 ```
 
 ### SetComfortMode / SetEcoMode / SetAwayMode / SetBoostMode / SetOff
@@ -340,17 +344,68 @@ float AHC_GetTargetTemperature(int $InstanceID);
 
 ### GetScheduleEventID
 
-Die ID des Wochenplan-Ereignisses abrufen.
+Die Ereignis-ID des ersten konfigurierten Wochenplans abrufen (aus Kompatibilitätsgründen erhalten).
 
 ```php
 int AHC_GetScheduleEventID(int $InstanceID);
 ```
 
-**Rückgabe:** Event-ID des Zeitplan-Ereignisses, oder 0 wenn nicht vorhanden
+**Rückgabe:** Ereignis-ID des ersten Wochenplans, oder 0 wenn keine Pläne konfiguriert sind
+
+### GetSchedulePlanCount
+
+Die Anzahl der konfigurierten Wochenpläne abrufen.
+
+```php
+int AHC_GetSchedulePlanCount(int $InstanceID);
+```
+
+**Rückgabe:** Anzahl der aktuell vom Modul verwalteten Pläne
+
+### GetSchedulePlanEventID
+
+Die Ereignis-ID eines bestimmten Wochenplans über seinen nullbasierten Index abrufen.
+
+```php
+int AHC_GetSchedulePlanEventID(int $InstanceID, int $Index);
+```
+
+**Parameter:**
+- `$InstanceID` - ID der AdvancedHeatingControl-Instanz
+- `$Index` - Nullbasierter Index des Plans (0 = erster Plan)
+
+**Rückgabe:** Ereignis-ID, oder 0 wenn der Index außerhalb des gültigen Bereichs liegt
+
+**Beispiel:**
+```php
+// Über alle Wochenpläne iterieren
+$count = AHC_GetSchedulePlanCount(12345);
+for ($i = 0; $i < $count; $i++) {
+    $eventID = AHC_GetSchedulePlanEventID(12345, $i);
+    echo "Plan $i: Ereignis #$eventID" . PHP_EOL;
+}
+```
 
 ---
 
 ## Changelog
+
+### Version 1.3.0
+- Geändert: Lizenzwechsel von MIT zu EUPL-1.2 (siehe LICENSE für den vollständigen Text). Releases bis 1.2.0 bleiben unter MIT.
+- Neu: Mehrere Wochenpläne — beliebig viele parallel laufende Pläne über die neue Liste **Wochenpläne** in der Instanzkonfiguration
+- Neu: `AHC_GetSchedulePlanCount` und `AHC_GetSchedulePlanEventID` für Skript-Zugriff auf die Plan-Liste
+- Geändert: Der bisherige einzelne Wochenplan wird beim ersten Speichern automatisch als Eintrag „Standard" in die neue Liste übernommen
+- Geändert: `AHC_GetScheduleEventID` liefert jetzt die Ereignis-ID des ersten Plans (rückwärtskompatibel für Installationen mit einem einzigen Plan)
+- Behoben: Falsches Beispiel für `AHC_SetHeatingMode` in der Dokumentation (Modus `2` ist Eco, nicht `1`)
+- Behoben: Wochenplan-Ereignisse werden nicht mehr komplett neu erstellt, wenn Action-/Gruppen-Anzahl abweicht — benutzerdefinierte Schaltzeiten bleiben erhalten
+- Behoben: Anzeige `Fenster offen` spiegelt beim Modulstart den tatsächlichen Kontaktzustand wider
+- Behoben: Fehlgeschlagene `RequestAction`-Aufrufe an Thermostate werden ins Modul-Log geschrieben statt stillschweigend verworfen
+- Behoben: Sollwert-Variablen werden bei Konfigurationsänderungen auf den aktuellen Min/Max-Bereich geclampt
+- Verbessert: Variablen-Darstellungen werden über stabile GUID-Konstanten statt lokalisierter Captions gesucht
+- Verbessert: Unbekannte Zeitplan-Action-IDs erzeugen eine Log-Warnung statt stillschweigend auf „Aus" zu schalten
+- Verbessert: Toleranz-Schwelle gegen Echo-Effekte skaliert mit der konfigurierten Schrittgröße (korrektes Verhalten bei Integer-Thermostaten)
+- Verbessert: Modul-Status meldet einen Fehler, wenn die Mindesttemperatur nicht unter der Maximaltemperatur liegt
+- Entfernt: Toter `TempBeforeWindowOpen`-Attribut (wurde geschrieben, aber nie gelesen)
 
 ### Version 1.2.0
 - Neu: Dauerhafter Abwesenheitsmodus (`Abwesenheitsmodus aktiv`) - wendet dauerhaft die Abwesend-Temperatur an und überschreibt den Zeitplan
@@ -386,9 +441,11 @@ Bei Problemen, Funktionswünschen oder Beiträgen besuchen Sie bitte:
 
 ## Lizenz
 
-Dieses Projekt ist unter der MIT-Lizenz lizenziert - siehe [LICENSE](LICENSE) Datei für Details.
+Dieses Projekt steht unter der **European Union Public Licence (EUPL) v. 1.2** — siehe die [LICENSE](LICENSE)-Datei für den vollständigen Lizenztext.
 
-Die MIT-Lizenz erlaubt die freie Nutzung, Modifikation und Weitergabe der Software, sowohl für private als auch kommerzielle Zwecke, unter der Bedingung, dass der Urheberrechtshinweis und die Lizenz beibehalten werden.
+Die EUPL ist eine Copyleft-Lizenz: abgeleitete Werke, die weitergegeben werden, müssen ebenfalls unter der EUPL oder einer kompatiblen Lizenz veröffentlicht werden (z. B. GPL, AGPL, MPL, LGPL — die vollständige Kompatibilitätsliste steht im Anhang der EUPL). Frühere Releases bis Version 1.2.0 bleiben weiterhin unter der zuvor genutzten MIT-Lizenz verfügbar.
+
+Die EUPL wird in 24 offiziellen Sprachfassungen veröffentlicht, die rechtlich alle gleichwertig sind. Die Lizenz kann in anderen Sprachen auf der [offiziellen EU-Seite](https://interoperable-europe.ec.europa.eu/collection/eupl/eupl-text-eupl-12) eingesehen werden.
 
 ---
 

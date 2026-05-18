@@ -1,15 +1,35 @@
 <?php
+
+/*
+ * AdvancedHeatingControl for IP-Symcon
+ *
+ * SPDX-License-Identifier: EUPL-1.2
+ * Copyright (c) 2026 mwlf01
+ *
+ * Licensed under the EUPL, Version 1.2. See the LICENSE file for the full text.
+ */
+
 declare(strict_types=1);
 
 class AdvancedHeatingControl extends IPSModule
 {
-    private const VM_UPDATE = 10603;
-
     private const ACTION_OFF = 1;
     private const ACTION_COMFORT = 2;
     private const ACTION_ECO = 3;
     private const ACTION_AWAY = 4;
     private const ACTION_BOOST = 5;
+
+    // Module status codes
+    private const STATUS_ACTIVE = 102;
+    private const STATUS_NO_THERMOSTATS = 104;
+    private const STATUS_INVALID_RANGE = 201;
+
+    // Mode constants (variable values, not schedule action IDs)
+    private const MODE_OFF = 0;
+    private const MODE_COMFORT = 1;
+    private const MODE_ECO = 2;
+    private const MODE_AWAY = 3;
+    private const MODE_BOOST = 4;
 
     /* ================= Lifecycle ================= */
     public function Create()
@@ -25,14 +45,19 @@ class AdvancedHeatingControl extends IPSModule
         // ---- Properties: Window Contacts ----
         $this->RegisterPropertyString('WindowContacts', '[]');
 
+        // ---- Properties: Schedule Plans (list of weekly schedules) ----
+        $this->RegisterPropertyString('SchedulePlans', '[]');
+
         // ---- Properties: Temperature Range ----
         $this->RegisterPropertyFloat('MinTemperature', 5.0);
         $this->RegisterPropertyFloat('MaxTemperature', 30.0);
         $this->RegisterPropertyFloat('TemperatureStep', 0.5);
 
         // ---- Attributes ----
+        // ScheduleEventID is kept for backward-compatible migration from versions <= 1.2.1
         $this->RegisterAttributeInteger('ScheduleEventID', 0);
-        $this->RegisterAttributeFloat('TempBeforeWindowOpen', 21.0);
+        // Tracks event IDs the module currently manages, for cleanup on removal
+        $this->RegisterAttributeString('ManagedScheduleEventIDs', '[]');
     }
 
     public function ApplyChanges()
@@ -48,16 +73,13 @@ class AdvancedHeatingControl extends IPSModule
             }
         }
 
-        // Get presentation IDs dynamically
-        $sliderPresentationID = $this->getPresentationIDByCaption('Slider');
-        $valuePresentationID = $this->getPresentationIDByCaption('Value Presentation');
-
-        // Temperature slider presentation config (reused for all temperature settings)
         $minTemp = $this->ReadPropertyFloat('MinTemperature');
         $maxTemp = $this->ReadPropertyFloat('MaxTemperature');
         $stepTemp = $this->ReadPropertyFloat('TemperatureStep');
+
+        // Reusable temperature slider presentation
         $tempPresentation = [
-            'PRESENTATION' => $sliderPresentationID,
+            'PRESENTATION' => VARIABLE_PRESENTATION_SLIDER,
             'ICON' => 'temperature-half',
             'MIN' => $minTemp,
             'MAX' => $maxTemp,
@@ -75,28 +97,27 @@ class AdvancedHeatingControl extends IPSModule
 
         // Current Room Temperature variable (position 2) - Value Presentation (no action)
         $this->MaintainVariable('CurrentTemperature', $this->Translate('Current Temperature'), VARIABLETYPE_FLOAT, [
-            'PRESENTATION' => $valuePresentationID,
+            'PRESENTATION' => VARIABLE_PRESENTATION_VALUE_PRESENTATION,
             'SUFFIX' => ' °C',
             'DIGITS' => 1,
             'USAGE_TYPE' => 1
         ], 2, true);
 
         // Heating Mode variable (position 3) - Enumeration presentation
-        $enumerationPresentationID = $this->getPresentationIDByCaption('Enumeration');
         $heatingModeOptions = json_encode([
-            ['Value' => 0, 'Caption' => $this->Translate('Off'), 'IconActive' => true, 'IconValue' => 'Power', 'Color' => 0x9E9E9E],
-            ['Value' => 1, 'Caption' => $this->Translate('Comfort'), 'IconActive' => true, 'IconValue' => 'Temperature', 'Color' => 0xFF6B35],
-            ['Value' => 2, 'Caption' => $this->Translate('Eco'), 'IconActive' => true, 'IconValue' => 'Leaf', 'Color' => 0x4CAF50],
-            ['Value' => 3, 'Caption' => $this->Translate('Away'), 'IconActive' => true, 'IconValue' => 'Motion', 'Color' => 0x03A9F4],
-            ['Value' => 4, 'Caption' => $this->Translate('Boost'), 'IconActive' => true, 'IconValue' => 'Flame', 'Color' => 0xF44336]
+            ['Value' => self::MODE_OFF, 'Caption' => $this->Translate('Off'), 'IconActive' => true, 'IconValue' => 'Power', 'Color' => 0x9E9E9E],
+            ['Value' => self::MODE_COMFORT, 'Caption' => $this->Translate('Comfort'), 'IconActive' => true, 'IconValue' => 'Temperature', 'Color' => 0xFF6B35],
+            ['Value' => self::MODE_ECO, 'Caption' => $this->Translate('Eco'), 'IconActive' => true, 'IconValue' => 'Leaf', 'Color' => 0x4CAF50],
+            ['Value' => self::MODE_AWAY, 'Caption' => $this->Translate('Away'), 'IconActive' => true, 'IconValue' => 'Motion', 'Color' => 0x03A9F4],
+            ['Value' => self::MODE_BOOST, 'Caption' => $this->Translate('Boost'), 'IconActive' => true, 'IconValue' => 'Flame', 'Color' => 0xF44336]
         ]);
         $this->MaintainVariable('HeatingMode', $this->Translate('Heating Mode'), VARIABLETYPE_INTEGER, [
-            'PRESENTATION' => $enumerationPresentationID,
+            'PRESENTATION' => VARIABLE_PRESENTATION_ENUMERATION,
             'ICON' => 'Temperature',
             'OPTIONS' => $heatingModeOptions
         ], 3, true);
         $this->EnableAction('HeatingMode');
-        $this->initializeVariableDefault('HeatingMode', 0, $existingVars);
+        $this->initializeVariableDefault('HeatingMode', self::MODE_OFF, $existingVars);
 
         // Comfort Temperature variable (position 4)
         $this->MaintainVariable('ComfortTemp', $this->Translate('Comfort Temperature'), VARIABLETYPE_FLOAT, $tempPresentation, 4, true);
@@ -118,10 +139,9 @@ class AdvancedHeatingControl extends IPSModule
         $this->EnableAction('BoostTemp');
         $this->initializeVariableDefault('BoostTemp', 24.0, $existingVars);
 
-        // Switch presentation config (reused for boolean switches)
-        $switchPresentationID = $this->getPresentationIDByCaption('Switch');
+        // Reusable switch presentation
         $switchPresentation = [
-            'PRESENTATION' => $switchPresentationID,
+            'PRESENTATION' => VARIABLE_PRESENTATION_SWITCH,
             'ICON_ON' => 'Power',
             'ICON_OFF' => 'Power',
             'COLOR_ON' => 0x4CAF50,
@@ -140,7 +160,7 @@ class AdvancedHeatingControl extends IPSModule
 
         // Manual Operation Blocked variable (position 10) - Switch with lock icon
         $lockSwitchPresentation = [
-            'PRESENTATION' => $switchPresentationID,
+            'PRESENTATION' => VARIABLE_PRESENTATION_SWITCH,
             'ICON_ON' => 'Lock',
             'ICON_OFF' => 'LockOpen',
             'COLOR_ON' => 0xF44336,
@@ -156,7 +176,7 @@ class AdvancedHeatingControl extends IPSModule
             ['Value' => true, 'Caption' => $this->Translate('Open'), 'IconActive' => false, 'IconValue' => '', 'ColorActive' => true, 'ColorValue' => 0x03A9F4]
         ]);
         $this->MaintainVariable('WindowOpen', $this->Translate('Window Open'), VARIABLETYPE_BOOLEAN, [
-            'PRESENTATION' => $valuePresentationID,
+            'PRESENTATION' => VARIABLE_PRESENTATION_VALUE_PRESENTATION,
             'ICON' => 'Window',
             'OPTIONS' => $windowOpenOptions
         ], 11, true);
@@ -172,35 +192,65 @@ class AdvancedHeatingControl extends IPSModule
         $this->EnableAction('AwayModeActive');
         $this->initializeVariableDefault('AwayModeActive', false, $existingVars);
 
-        // Remove old variables if they exist
+        // Remove obsolete variables from earlier versions
         $this->MaintainVariable('FrostTemp', '', VARIABLETYPE_FLOAT, '', 0, false);
         $this->MaintainVariable('HeatingActive', '', VARIABLETYPE_BOOLEAN, '', 0, false);
         $this->MaintainVariable('NightTemp', '', VARIABLETYPE_FLOAT, '', 0, false);
 
-        // Create or update the weekly schedule event
-        $this->maintainScheduleEvent();
+        // Validate temperature range — abort initialization if invalid
+        if ($minTemp >= $maxTemp) {
+            $this->SetStatus(self::STATUS_INVALID_RANGE);
+            return;
+        }
+
+        // Clamp existing setpoints into the (possibly new) range
+        $this->clampSetpointsToRange($minTemp, $maxTemp);
+
+        // One-time migration from old single-schedule layout (<= 1.2.1) to schedule-plan list
+        if ($this->migrateLegacyScheduleIfNeeded()) {
+            // Migration triggered a recursive ApplyChanges via IPS_ApplyChanges - exit early
+            return;
+        }
+
+        // Create or update all configured weekly schedule events.
+        // If new event IDs were written back into the property, this triggers a recursive
+        // ApplyChanges so the configuration form picks up the new IDs.
+        if ($this->maintainSchedulePlans()) {
+            return;
+        }
 
         // Register message subscriptions
         $this->registerMessages();
 
-        // Update status
+        // Update status based on configuration
         $thermostats = $this->getThermostats();
         if (empty($thermostats)) {
-            $this->SetStatus(104); // No thermostats configured
+            $this->SetStatus(self::STATUS_NO_THERMOSTATS);
         } else {
-            $this->SetStatus(102); // Active
+            $this->SetStatus(self::STATUS_ACTIVE);
         }
 
         // Initial temperature update
         $this->updateCurrentTemperature();
+
+        // Synchronize window-open indicator with real contact state
+        $this->handleWindowContactChange();
     }
 
     public function Destroy()
     {
-        // Clean up schedule event if this instance is being deleted
-        $scheduleID = $this->ReadAttributeInteger('ScheduleEventID');
-        if ($scheduleID > 0 && @IPS_EventExists($scheduleID)) {
-            IPS_DeleteEvent($scheduleID);
+        // Clean up all managed schedule events when this instance is deleted
+        $managed = $this->getManagedEventIDs();
+        foreach ($managed as $eventID) {
+            if ($eventID > 0 && @IPS_EventExists($eventID)) {
+                @IPS_DeleteEvent($eventID);
+            }
+        }
+
+        // Also clean up legacy attribute if still present
+        $legacyID = $this->ReadAttributeInteger('ScheduleEventID');
+        if ($legacyID > 0 && @IPS_EventExists($legacyID) && !in_array($legacyID, $managed, true)) {
+            @IPS_DeleteEvent($legacyID);
         }
 
         parent::Destroy();
@@ -209,8 +259,6 @@ class AdvancedHeatingControl extends IPSModule
     /* ================= Configuration Form ================= */
     public function GetConfigurationForm(): string
     {
-        $scheduleID = $this->ReadAttributeInteger('ScheduleEventID');
-
         return json_encode([
             'elements' => [
                 [
@@ -354,20 +402,44 @@ class AdvancedHeatingControl extends IPSModule
                 ],
                 [
                     'type' => 'ExpansionPanel',
-                    'caption' => 'Weekly Schedule',
+                    'caption' => 'Weekly Schedules',
                     'items' => [
                         [
                             'type' => 'Label',
-                            'caption' => 'The weekly schedule is managed via IP-Symcon\'s built-in schedule event.'
+                            'caption' => 'Each entry creates a weekly schedule event below this instance with the actions Off, Comfort, Eco, Away and Boost.'
                         ],
                         [
                             'type' => 'Label',
-                            'caption' => 'Configure Comfort, Eco, Away, Boost, and Off times in the schedule below the instance.'
+                            'caption' => 'Plans run in parallel. Activate or deactivate individual plans via the schedule event\'s built-in switch. If multiple plans fire at the same time, the last action wins.'
                         ],
                         [
-                            'type' => 'OpenObjectButton',
-                            'objectID' => $scheduleID,
-                            'caption' => 'Open Weekly Schedule'
+                            'type' => 'List',
+                            'name' => 'SchedulePlans',
+                            'caption' => 'Schedule Plans',
+                            'rowCount' => 5,
+                            'add' => true,
+                            'delete' => true,
+                            'columns' => [
+                                [
+                                    'caption' => 'Name',
+                                    'name' => 'Name',
+                                    'width' => 'auto',
+                                    'add' => '',
+                                    'edit' => [
+                                        'type' => 'ValidationTextBox'
+                                    ]
+                                ],
+                                [
+                                    'caption' => 'Event ID',
+                                    'name' => 'EventID',
+                                    'width' => '120px',
+                                    'add' => 0,
+                                    'edit' => [
+                                        'type' => 'NumberSpinner',
+                                        'enabled' => false
+                                    ]
+                                ]
+                            ]
                         ]
                     ]
                 ]
@@ -382,6 +454,11 @@ class AdvancedHeatingControl extends IPSModule
                     'code' => 104,
                     'icon' => 'inactive',
                     'caption' => 'No thermostats configured'
+                ],
+                [
+                    'code' => 201,
+                    'icon' => 'error',
+                    'caption' => 'Invalid temperature range (minimum must be below maximum)'
                 ]
             ]
         ]);
@@ -525,25 +602,20 @@ class AdvancedHeatingControl extends IPSModule
      */
     public function ScheduleAction(int $ActionID): void
     {
-        // Determine the mode from action ID (mode order: Off=0, Comfort=1, Eco=2, Away=3, Boost=4)
-        $mode = 0;
-        switch ($ActionID) {
-            case self::ACTION_OFF:
-                $mode = 0;
-                break;
-            case self::ACTION_COMFORT:
-                $mode = 1;
-                break;
-            case self::ACTION_ECO:
-                $mode = 2;
-                break;
-            case self::ACTION_AWAY:
-                $mode = 3;
-                break;
-            case self::ACTION_BOOST:
-                $mode = 4;
-                break;
+        $modeMap = [
+            self::ACTION_OFF     => self::MODE_OFF,
+            self::ACTION_COMFORT => self::MODE_COMFORT,
+            self::ACTION_ECO     => self::MODE_ECO,
+            self::ACTION_AWAY    => self::MODE_AWAY,
+            self::ACTION_BOOST   => self::MODE_BOOST,
+        ];
+
+        if (!array_key_exists($ActionID, $modeMap)) {
+            $this->LogMessage('Unknown schedule action ID: ' . $ActionID, KL_WARNING);
+            return;
         }
+
+        $mode = $modeMap[$ActionID];
 
         // Always update the heating mode variable (so we know what schedule wants)
         SetValue($this->GetIDForIdent('HeatingMode'), $mode);
@@ -557,7 +629,7 @@ class AdvancedHeatingControl extends IPSModule
     /* ================= Message Sink ================= */
     public function MessageSink($TimeStamp, $SenderID, $Message, $Data)
     {
-        if ($Message !== self::VM_UPDATE) {
+        if ($Message !== VM_UPDATE) {
             return;
         }
 
@@ -609,15 +681,16 @@ class AdvancedHeatingControl extends IPSModule
      */
     public function ApplyTemperature(): void
     {
-        $targetTemp = @GetValue($this->GetIDForIdent('TargetTemperature'));
+        $targetTemp = (float)@GetValue($this->GetIDForIdent('TargetTemperature'));
+        $tolerance = $this->getChangeTolerance();
         $thermostats = $this->getThermostats();
 
         foreach ($thermostats as $thermostat) {
             $thermostatID = (int)$thermostat['ThermostatID'];
             if ($thermostatID > 0 && @IPS_VariableExists($thermostatID)) {
-                $current = @GetValue($thermostatID);
-                if (abs($current - $targetTemp) > 0.05) {
-                    @RequestAction($thermostatID, $targetTemp);
+                $current = (float)@GetValue($thermostatID);
+                if (abs($current - $targetTemp) > $tolerance) {
+                    $this->safeRequestAction($thermostatID, $targetTemp, 'ApplyTemperature');
                 }
             }
         }
@@ -739,12 +812,34 @@ class AdvancedHeatingControl extends IPSModule
     }
 
     /**
-     * Get the schedule event ID
-     * @return int Event ID or 0 if not exists
+     * Get the event ID of the first configured schedule plan (backward compatibility).
+     * Returns 0 if no plans are configured.
+     * @return int Event ID of the first plan or 0
      */
     public function GetScheduleEventID(): int
     {
-        return $this->ReadAttributeInteger('ScheduleEventID');
+        $managed = $this->getManagedEventIDs();
+        return $managed[0] ?? 0;
+    }
+
+    /**
+     * Get the number of configured schedule plans.
+     * @return int Number of plans
+     */
+    public function GetSchedulePlanCount(): int
+    {
+        return count($this->getManagedEventIDs());
+    }
+
+    /**
+     * Get the event ID of a specific schedule plan by index (0-based).
+     * @param int $Index Zero-based index of the plan
+     * @return int Event ID, or 0 if the index is out of range
+     */
+    public function GetSchedulePlanEventID(int $Index): int
+    {
+        $managed = $this->getManagedEventIDs();
+        return $managed[$Index] ?? 0;
     }
 
     /* ================= Private Helper Functions ================= */
@@ -799,7 +894,7 @@ class AdvancedHeatingControl extends IPSModule
         foreach ($thermostats as $thermostat) {
             $thermostatID = (int)$thermostat['ThermostatID'];
             if ($thermostatID > 0) {
-                $this->RegisterMessage($thermostatID, self::VM_UPDATE);
+                $this->RegisterMessage($thermostatID, VM_UPDATE);
             }
         }
 
@@ -808,7 +903,7 @@ class AdvancedHeatingControl extends IPSModule
         foreach ($sensors as $sensor) {
             $sensorID = (int)$sensor['SensorID'];
             if ($sensorID > 0) {
-                $this->RegisterMessage($sensorID, self::VM_UPDATE);
+                $this->RegisterMessage($sensorID, VM_UPDATE);
             }
         }
 
@@ -817,7 +912,7 @@ class AdvancedHeatingControl extends IPSModule
         foreach ($contacts as $contact) {
             $contactID = (int)$contact['ContactID'];
             if ($contactID > 0) {
-                $this->RegisterMessage($contactID, self::VM_UPDATE);
+                $this->RegisterMessage($contactID, VM_UPDATE);
             }
         }
     }
@@ -826,6 +921,11 @@ class AdvancedHeatingControl extends IPSModule
     {
         $sensors = $this->getTemperatureSensors();
         if (empty($sensors)) {
+            // Distinguish "nothing configured" from "all configured sensors invalid"
+            $raw = @json_decode($this->ReadPropertyString('TemperatureSensors'), true);
+            if (is_array($raw) && count($raw) > 0) {
+                $this->LogMessage('All configured temperature sensors are invalid — CurrentTemperature not updated', KL_WARNING);
+            }
             return;
         }
 
@@ -905,24 +1005,25 @@ class AdvancedHeatingControl extends IPSModule
 
     private function handleThermostatChange(int $thermostatID, float $newTemp): void
     {
-        $currentTarget = @GetValue($this->GetIDForIdent('TargetTemperature'));
-        
+        $currentTarget = (float)@GetValue($this->GetIDForIdent('TargetTemperature'));
+        $tolerance = $this->getChangeTolerance();
+
         // Check if the change was significant (not just our own update)
-        if (abs($newTemp - $currentTarget) < 0.05) {
+        if (abs($newTemp - $currentTarget) < $tolerance) {
             return;
         }
 
         // Check if window is open - block all manual changes
         if ($this->isWindowOpen()) {
             // Immediately revert the thermostat to our target temperature
-            @RequestAction($thermostatID, $currentTarget);
+            $this->safeRequestAction($thermostatID, $currentTarget, 'revert window-open');
             return;
         }
 
         // Check if manual operation is blocked
         if ($this->isManualOperationBlocked()) {
             // Immediately revert the thermostat to our target temperature
-            @RequestAction($thermostatID, $currentTarget);
+            $this->safeRequestAction($thermostatID, $currentTarget, 'revert manual-blocked');
             return;
         }
 
@@ -939,9 +1040,9 @@ class AdvancedHeatingControl extends IPSModule
         foreach ($thermostats as $thermostat) {
             $id = (int)$thermostat['ThermostatID'];
             if ($id > 0 && $id !== $thermostatID && @IPS_VariableExists($id)) {
-                $current = @GetValue($id);
-                if (abs($current - $newTemp) > 0.05) {
-                    @RequestAction($id, $newTemp);
+                $current = (float)@GetValue($id);
+                if (abs($current - $newTemp) > $tolerance) {
+                    $this->safeRequestAction($id, $newTemp, 'sync thermostats');
                 }
             }
         }
@@ -988,10 +1089,7 @@ class AdvancedHeatingControl extends IPSModule
         SetValue($this->GetIDForIdent('WindowOpen'), $anyWindowOpen);
 
         if ($anyWindowOpen && !$wasWindowOpen) {
-            // Window just opened - save current target temperature and apply window open temperature
-            $currentTarget = @GetValue($this->GetIDForIdent('TargetTemperature'));
-            $this->WriteAttributeFloat('TempBeforeWindowOpen', $currentTarget);
-
+            // Window just opened - apply window open temperature
             $windowOpenTemp = @GetValue($this->GetIDForIdent('WindowOpenTemp'));
             SetValue($this->GetIDForIdent('TargetTemperature'), $windowOpenTemp);
             $this->ApplyTemperature();
@@ -1011,56 +1109,185 @@ class AdvancedHeatingControl extends IPSModule
         }
     }
 
-    private function maintainScheduleEvent(): void
+    /**
+     * One-time migration from versions <= 1.2.1 that stored a single event ID in an attribute.
+     * Moves the legacy event into the new SchedulePlans list as "Standard".
+     * @return bool True if a recursive ApplyChanges was triggered and the current run should abort.
+     */
+    private function migrateLegacyScheduleIfNeeded(): bool
     {
-        $scheduleID = $this->ReadAttributeInteger('ScheduleEventID');
-
-        // Check if existing schedule event still exists
-        if ($scheduleID > 0 && !@IPS_EventExists($scheduleID)) {
-            $scheduleID = 0;
+        $legacyID = $this->ReadAttributeInteger('ScheduleEventID');
+        if ($legacyID <= 0 || !@IPS_EventExists($legacyID)) {
+            // Nothing to migrate or legacy event already gone
+            if ($legacyID > 0) {
+                $this->WriteAttributeInteger('ScheduleEventID', 0);
+            }
+            return false;
         }
 
-        // Check if existing schedule has correct number of groups (7) and actions (5)
-        if ($scheduleID > 0) {
-            $event = @IPS_GetEvent($scheduleID);
-            if ($event && (count($event['ScheduleGroups']) !== 7 || count($event['ScheduleActions']) !== 5)) {
-                // Old schedule format, delete and recreate
-                IPS_DeleteEvent($scheduleID);
-                $scheduleID = 0;
+        $plansRaw = $this->ReadPropertyString('SchedulePlans');
+        $plans = json_decode($plansRaw, true);
+        if (!is_array($plans)) {
+            $plans = [];
+        }
+
+        // Skip migration if the new list already references the legacy event or is non-empty
+        foreach ($plans as $plan) {
+            if ((int)($plan['EventID'] ?? 0) === $legacyID) {
+                $this->WriteAttributeInteger('ScheduleEventID', 0);
+                return false;
             }
         }
 
-        // Create new schedule event if needed
-        if ($scheduleID === 0) {
-            $scheduleID = IPS_CreateEvent(2); // 2 = Schedule event
-            IPS_SetParent($scheduleID, $this->InstanceID);
-            IPS_SetName($scheduleID, $this->Translate('Weekly Schedule'));
-            IPS_SetEventActive($scheduleID, true);
+        if (count($plans) > 0) {
+            // User already set up plans manually - keep legacy event but unlink it from the module
+            $this->WriteAttributeInteger('ScheduleEventID', 0);
+            return false;
+        }
 
-            // Set up schedule groups for each day individually (7 groups)
-            // Day bits: 1=Monday, 2=Tuesday, 4=Wednesday, 8=Thursday, 16=Friday, 32=Saturday, 64=Sunday
-            IPS_SetEventScheduleGroup($scheduleID, 0, 1);   // Monday
-            IPS_SetEventScheduleGroup($scheduleID, 1, 2);   // Tuesday
-            IPS_SetEventScheduleGroup($scheduleID, 2, 4);   // Wednesday
-            IPS_SetEventScheduleGroup($scheduleID, 3, 8);   // Thursday
-            IPS_SetEventScheduleGroup($scheduleID, 4, 16);  // Friday
-            IPS_SetEventScheduleGroup($scheduleID, 5, 32);  // Saturday
-            IPS_SetEventScheduleGroup($scheduleID, 6, 64);  // Sunday
+        // Migrate: prepend legacy event as "Standard" plan
+        $plans[] = ['Name' => $this->Translate('Standard'), 'EventID' => $legacyID];
+        IPS_SetProperty($this->InstanceID, 'SchedulePlans', json_encode($plans));
+        $this->WriteAttributeInteger('ScheduleEventID', 0);
+        IPS_ApplyChanges($this->InstanceID);
+        return true;
+    }
 
-            // Set up schedule actions in order: Off, Comfort, Eco, Away, Boost
-            IPS_SetEventScheduleAction($scheduleID, self::ACTION_OFF, $this->Translate('Off'), 0x9E9E9E, 'AHC_ScheduleAction($_IPS[\'TARGET\'], ' . self::ACTION_OFF . ');');
-            IPS_SetEventScheduleAction($scheduleID, self::ACTION_COMFORT, $this->Translate('Comfort'), 0xFF6B35, 'AHC_ScheduleAction($_IPS[\'TARGET\'], ' . self::ACTION_COMFORT . ');');
-            IPS_SetEventScheduleAction($scheduleID, self::ACTION_ECO, $this->Translate('Eco'), 0x4CAF50, 'AHC_ScheduleAction($_IPS[\'TARGET\'], ' . self::ACTION_ECO . ');');
-            IPS_SetEventScheduleAction($scheduleID, self::ACTION_AWAY, $this->Translate('Away'), 0x03A9F4, 'AHC_ScheduleAction($_IPS[\'TARGET\'], ' . self::ACTION_AWAY . ');');
-            IPS_SetEventScheduleAction($scheduleID, self::ACTION_BOOST, $this->Translate('Boost'), 0xF44336, 'AHC_ScheduleAction($_IPS[\'TARGET\'], ' . self::ACTION_BOOST . ');');
+    /**
+     * Reconcile the configured SchedulePlans list with actual IPS schedule events:
+     *  - create events for new plan entries
+     *  - reuse and rename existing events
+     *  - delete events that were managed but are no longer referenced
+     *  - write back updated EventIDs into the property so the UI shows them
+     *
+     * @return bool True if event IDs were written back and a recursive ApplyChanges was triggered.
+     *              The caller must abort the current run in that case.
+     */
+    private function maintainSchedulePlans(): bool
+    {
+        $plansRaw = $this->ReadPropertyString('SchedulePlans');
+        $plans = json_decode($plansRaw, true);
+        if (!is_array($plans)) {
+            $plans = [];
+        }
 
-            // Set default schedule points for all days - entirely Off
+        $previouslyManaged = $this->getManagedEventIDs();
+        $stillManaged = [];
+        $propertyChanged = false;
+
+        foreach ($plans as $index => $plan) {
+            $name = trim((string)($plan['Name'] ?? ''));
+            if ($name === '') {
+                $name = $this->Translate('Weekly Schedule') . ' ' . ($index + 1);
+            }
+            $eventID = (int)($plan['EventID'] ?? 0);
+
+            if ($eventID > 0 && !@IPS_EventExists($eventID)) {
+                // Stored ID points to a deleted event - create a fresh one
+                $eventID = 0;
+            }
+
+            $isNewEvent = ($eventID === 0);
+            if ($isNewEvent) {
+                $eventID = IPS_CreateEvent(2); // 2 = Schedule event
+                IPS_SetParent($eventID, $this->InstanceID);
+                IPS_SetEventActive($eventID, true);
+                $plans[$index]['EventID'] = $eventID;
+                $propertyChanged = true;
+            }
+
+            // Keep event name in sync with the configured plan name
+            $existingName = @IPS_GetName($eventID);
+            if ($existingName !== $name) {
+                IPS_SetName($eventID, $name);
+            }
+
+            $this->ensureScheduleStructure($eventID, $isNewEvent);
+
+            $stillManaged[] = $eventID;
+        }
+
+        // Delete events that were previously managed but are no longer in the plan list
+        $toDelete = array_diff($previouslyManaged, $stillManaged);
+        foreach ($toDelete as $eventID) {
+            if ($eventID > 0 && @IPS_EventExists($eventID)) {
+                @IPS_DeleteEvent($eventID);
+            }
+        }
+
+        $this->WriteAttributeString('ManagedScheduleEventIDs', json_encode($stillManaged));
+
+        if ($propertyChanged) {
+            // Persist the newly assigned event IDs so the configuration form shows them.
+            // Trigger a recursive ApplyChanges so the property is committed; on the recursive
+            // run no new IDs are assigned, so we won't loop.
+            IPS_SetProperty($this->InstanceID, 'SchedulePlans', json_encode($plans));
+            IPS_ApplyChanges($this->InstanceID);
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Ensure the given schedule event has our 5 actions and 7 day-groups.
+     * Existing user-added groups/actions and switch points are left untouched.
+     */
+    private function ensureScheduleStructure(int $scheduleID, bool $isNewEvent): void
+    {
+        $dayBits = [1, 2, 4, 8, 16, 32, 64]; // Mon..Sun
+
+        if ($isNewEvent) {
+            foreach ($dayBits as $groupID => $bits) {
+                IPS_SetEventScheduleGroup($scheduleID, $groupID, $bits);
+            }
+        } else {
+            $existingGroups = $this->getExistingScheduleGroupIDs($scheduleID);
+            foreach ($dayBits as $groupID => $bits) {
+                if (!in_array($groupID, $existingGroups, true)) {
+                    IPS_SetEventScheduleGroup($scheduleID, $groupID, $bits);
+                }
+            }
+        }
+
+        // Idempotent action setup - safe to call on existing events without affecting switch points
+        IPS_SetEventScheduleAction($scheduleID, self::ACTION_OFF, $this->Translate('Off'), 0x9E9E9E, 'AHC_ScheduleAction($_IPS[\'TARGET\'], ' . self::ACTION_OFF . ');');
+        IPS_SetEventScheduleAction($scheduleID, self::ACTION_COMFORT, $this->Translate('Comfort'), 0xFF6B35, 'AHC_ScheduleAction($_IPS[\'TARGET\'], ' . self::ACTION_COMFORT . ');');
+        IPS_SetEventScheduleAction($scheduleID, self::ACTION_ECO, $this->Translate('Eco'), 0x4CAF50, 'AHC_ScheduleAction($_IPS[\'TARGET\'], ' . self::ACTION_ECO . ');');
+        IPS_SetEventScheduleAction($scheduleID, self::ACTION_AWAY, $this->Translate('Away'), 0x03A9F4, 'AHC_ScheduleAction($_IPS[\'TARGET\'], ' . self::ACTION_AWAY . ');');
+        IPS_SetEventScheduleAction($scheduleID, self::ACTION_BOOST, $this->Translate('Boost'), 0xF44336, 'AHC_ScheduleAction($_IPS[\'TARGET\'], ' . self::ACTION_BOOST . ');');
+
+        if ($isNewEvent) {
+            // Default schedule points for all days - entirely Off
             for ($group = 0; $group <= 6; $group++) {
                 IPS_SetEventScheduleGroupPoint($scheduleID, $group, 0, 0, 0, 0, self::ACTION_OFF);
             }
-
-            $this->WriteAttributeInteger('ScheduleEventID', $scheduleID);
         }
+    }
+
+    private function getManagedEventIDs(): array
+    {
+        $raw = $this->ReadAttributeString('ManagedScheduleEventIDs');
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded)) {
+            return [];
+        }
+        return array_map('intval', $decoded);
+    }
+
+    private function getExistingScheduleGroupIDs(int $scheduleID): array
+    {
+        $event = @IPS_GetEvent($scheduleID);
+        if (!is_array($event) || !isset($event['ScheduleGroups']) || !is_array($event['ScheduleGroups'])) {
+            return [];
+        }
+        $groupIDs = [];
+        foreach ($event['ScheduleGroups'] as $group) {
+            if (isset($group['ID'])) {
+                $groupIDs[] = (int)$group['ID'];
+            }
+        }
+        return $groupIDs;
     }
 
     private function initializeVariableDefault(string $ident, $defaultValue, array $existingVars = []): void
@@ -1078,18 +1305,47 @@ class AdvancedHeatingControl extends IPSModule
         SetValue($varID, $defaultValue);
     }
 
-    private function getPresentationIDByCaption(string $caption): string
+    private function clampSetpointsToRange(float $minTemp, float $maxTemp): void
     {
-        $presentationsData = IPS_GetPresentations();
-        $presentations = is_string($presentationsData) ? json_decode($presentationsData, true) : $presentationsData;
-        if (!is_array($presentations)) {
-            return '';
-        }
-        foreach ($presentations as $presentation) {
-            if (isset($presentation['caption']) && $presentation['caption'] === $caption) {
-                return $presentation['id'];
+        $idents = ['TargetTemperature', 'ComfortTemp', 'EcoTemp', 'AwayTemp', 'BoostTemp', 'NightSetbackTemp', 'WindowOpenTemp'];
+        foreach ($idents as $ident) {
+            $varID = @$this->GetIDForIdent($ident);
+            if (!$varID || !@IPS_VariableExists($varID)) {
+                continue;
+            }
+            $val = (float)@GetValue($varID);
+            $clamped = max($minTemp, min($maxTemp, $val));
+            if (abs($val - $clamped) > 0.0001) {
+                SetValue($varID, $clamped);
             }
         }
-        return '';
+    }
+
+    private function getChangeTolerance(): float
+    {
+        // Half the step size, with a floor for safe float comparison
+        $step = $this->ReadPropertyFloat('TemperatureStep');
+        return max($step / 2.0, 0.05);
+    }
+
+    private function safeRequestAction(int $variableID, $value, string $context = ''): bool
+    {
+        $result = @RequestAction($variableID, $value);
+        if ($result === false) {
+            $name = @IPS_GetName($variableID);
+            $valueStr = is_scalar($value) ? (string)$value : json_encode($value);
+            $this->LogMessage(
+                sprintf(
+                    'RequestAction failed for variable #%d (%s) with value %s%s',
+                    $variableID,
+                    $name !== false ? $name : '?',
+                    $valueStr,
+                    $context !== '' ? ' [' . $context . ']' : ''
+                ),
+                KL_WARNING
+            );
+            return false;
+        }
+        return true;
     }
 }

@@ -1,7 +1,7 @@
 # AdvancedHeatingControl for IP-Symcon
 
 [![IP-Symcon Version](https://img.shields.io/badge/IP--Symcon-8.1+-blue.svg)](https://www.symcon.de)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: EUPL-1.2](https://img.shields.io/badge/License-EUPL--1.2-blue.svg)](LICENSE)
 
 A powerful IP-Symcon module for centralized heating control with multiple thermostats, room temperature sensors, and weekly scheduling.
 
@@ -18,7 +18,7 @@ A powerful IP-Symcon module for centralized heating control with multiple thermo
   - [Thermostats](#thermostats)
   - [Temperature Sensors](#temperature-sensors)
   - [Window Contacts](#window-contacts)
-  - [Weekly Schedule](#weekly-schedule)
+  - [Weekly Schedules](#weekly-schedules)
 - [Variables](#variables)
 - [PHP Functions](#php-functions)
 - [License](#license)
@@ -38,11 +38,12 @@ A powerful IP-Symcon module for centralized heating control with multiple thermo
   - **Eco**: Energy-saving reduced temperature (~18°C)
   - **Away**: Reduced temperature when nobody is home (~15°C)
   - **Boost**: Higher temperature for quick warm-up (~24°C)
-- **Weekly Schedule**:
-  - Uses IP-Symcon's built-in schedule event
-  - Visual schedule editor in the console
-  - Five schedule actions: Comfort, Eco, Away, Boost, Off
+- **Weekly Schedules**:
+  - Configure any number of parallel weekly schedule plans via the instance configuration
+  - Each plan is its own IP-Symcon schedule event with a visual editor in the console
+  - Five schedule actions per plan: Comfort, Eco, Away, Boost, Off
   - Individual configuration for each day of the week
+  - Activate or deactivate individual plans via the schedule event's built-in switch
 - **Night Setback**:
   - Override schedule with a fixed setback temperature
   - Enable/disable via boolean variable
@@ -159,18 +160,21 @@ Configure the temperature range and step size:
 | **Maximum Temperature** | Highest allowed temperature | 30.0°C |
 | **Temperature Step** | Step size for temperature adjustments | 0.5°C |
 
-### Weekly Schedule
+### Weekly Schedules
 
-The module uses IP-Symcon's built-in schedule event for time-based heating control:
+The module supports any number of parallel weekly schedule events for time-based heating control:
 
-- A schedule event is automatically created below the instance
-- Five schedule actions are available: **Comfort**, **Eco**, **Away**, **Boost**, **Off**
-- Each day of the week can be configured individually
-- Use the visual schedule editor in the IP-Symcon Console or WebFront to configure times
+- Add one or more entries to the **Schedule Plans** list in the instance configuration
+- For each entry the module creates a schedule event below the instance with the actions **Off**, **Comfort**, **Eco**, **Away** and **Boost**
+- The auto-generated event ID is written back into the list once the configuration is saved
+- Configure switching times in the visual schedule editor (IP-Symcon Console or WebFront) of each event
+- Activate or deactivate individual plans via the schedule event's built-in switch — no module configuration change needed
+- Plans run in parallel; if multiple plans fire a switching action at the same time, the last action wins
+- Removing a plan from the list deletes its schedule event on the next configuration save
 
 Temperature presets (Comfort, Eco, Away, Boost) are configured via variables in the visualization, not in the instance configuration.
 
-**Night Setback:** When enabled, the night setback temperature overrides the schedule. The schedule continues to run in the background, but the setback temperature is applied to thermostats. When disabled, the current schedule mode is reapplied.
+**Night Setback:** When enabled, the night setback temperature overrides any active schedule. Schedules continue to run in the background, but the setback temperature is applied to thermostats. When disabled, the current schedule mode is reapplied.
 
 ---
 
@@ -246,7 +250,7 @@ AHC_SetHeatingMode(int $InstanceID, int $Mode);
 **Example:**
 ```php
 // Set to Eco mode
-AHC_SetHeatingMode(12345, 1);
+AHC_SetHeatingMode(12345, 2);
 ```
 
 ### SetComfortMode / SetEcoMode / SetAwayMode / SetBoostMode / SetOff
@@ -340,17 +344,68 @@ float AHC_GetTargetTemperature(int $InstanceID);
 
 ### GetScheduleEventID
 
-Get the ID of the weekly schedule event.
+Get the event ID of the first configured schedule plan (kept for backward compatibility).
 
 ```php
 int AHC_GetScheduleEventID(int $InstanceID);
 ```
 
-**Returns:** Event ID of the schedule event, or 0 if not exists
+**Returns:** Event ID of the first schedule plan, or 0 if no plans are configured
+
+### GetSchedulePlanCount
+
+Get the number of configured schedule plans.
+
+```php
+int AHC_GetSchedulePlanCount(int $InstanceID);
+```
+
+**Returns:** Number of plans currently managed by the instance
+
+### GetSchedulePlanEventID
+
+Get the event ID of a specific schedule plan by its zero-based index.
+
+```php
+int AHC_GetSchedulePlanEventID(int $InstanceID, int $Index);
+```
+
+**Parameters:**
+- `$InstanceID` - ID of the AdvancedHeatingControl instance
+- `$Index` - Zero-based index of the plan (0 = first plan)
+
+**Returns:** Event ID, or 0 if the index is out of range
+
+**Example:**
+```php
+// Iterate over all schedule plans
+$count = AHC_GetSchedulePlanCount(12345);
+for ($i = 0; $i < $count; $i++) {
+    $eventID = AHC_GetSchedulePlanEventID(12345, $i);
+    echo "Plan $i: Event #$eventID" . PHP_EOL;
+}
+```
 
 ---
 
 ## Changelog
+
+### Version 1.3.0
+- Changed: Licence switched from MIT to EUPL-1.2 (see LICENSE for the full text). Releases up to 1.2.0 remain under MIT.
+- Added: Multiple weekly schedule plans — configure any number of parallel schedules via the new **Schedule Plans** list in the instance configuration
+- Added: `AHC_GetSchedulePlanCount` and `AHC_GetSchedulePlanEventID` for scripted access to the plan list
+- Changed: Existing single schedule from earlier versions is automatically migrated into the new list as a plan named "Standard" on first configuration save
+- Changed: `AHC_GetScheduleEventID` now returns the event ID of the first plan (backward compatible for installations with a single plan)
+- Fixed: Incorrect example for `AHC_SetHeatingMode` in the documentation (mode `2` is Eco, not `1`)
+- Fixed: Schedule events are no longer rebuilt from scratch when their action/group count differs — user-configured switch points are preserved
+- Fixed: `Window Open` indicator now reflects the actual contact state on module startup
+- Fixed: Failed `RequestAction` calls to thermostats are written to the module log instead of being silently dropped
+- Fixed: Setpoint values are clamped to the current min/max range after configuration changes
+- Improved: Variable presentations are identified via stable GUID constants instead of localized captions
+- Improved: Unknown schedule action IDs trigger a log warning instead of silently switching to Off
+- Improved: Echo-protection tolerance scales with the configured temperature step (correct behavior with integer thermostats)
+- Improved: Module status reports an error when minimum temperature is not below maximum
+- Removed: Dead `TempBeforeWindowOpen` attribute (was written but never read)
 
 ### Version 1.2.0
 - Added: Permanent away mode (`Away Mode Active`) - permanently applies the away temperature, overriding the schedule
@@ -386,7 +441,11 @@ For issues, feature requests, or contributions, please visit:
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the **European Union Public Licence (EUPL) v. 1.2** — see the [LICENSE](LICENSE) file for the full text.
+
+The EUPL is a copyleft licence: derivative works that are distributed must also be released under the EUPL or a compatible licence (e.g. GPL, AGPL, MPL, LGPL — see the appendix of the EUPL for the full compatibility list). Earlier releases up to version 1.2.0 remain available under the previous MIT licence.
+
+The EUPL is published in 24 official language versions, all legally equivalent. Other language versions are available on the [official EU page](https://interoperable-europe.ec.europa.eu/collection/eupl/eupl-text-eupl-12).
 
 ---
 
